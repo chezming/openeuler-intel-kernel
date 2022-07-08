@@ -1,11 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0
-#include <linux/kernel.h>
 #include <linux/mm.h>
-#include <linux/init.h>
 #include <linux/smp.h>
-#include <linux/delay.h>
 #include <linux/spinlock.h>
-#include <linux/uaccess.h>
+
+#include <asm/chip3_io.h>
 
 #ifdef CONFIG_SW64_RRK
 
@@ -20,7 +18,7 @@ unsigned long sw64_printk_offset;
  * For output the kernel message on the console
  * with full-system emulator.
  */
-#define QEMU_PRINTF_BUFF_BASE	(0x805000040000ULL | PAGE_OFFSET)
+#define QEMU_PRINTF_BUFF_BASE	(IO_BASE | MCU_BASE | 0x40000UL | PAGE_OFFSET)
 
 int sw64_printk(const char *fmt, va_list args)
 {
@@ -39,7 +37,7 @@ int sw64_printk(const char *fmt, va_list args)
 		printed_len += vscnprintf(sw64_printk_buf, 1024, fmt, args);
 	} else {
 		printed_len += vscnprintf(sw64_printk_buf, 1024, fmt, args);
-		if (is_guest_or_emul()) {
+		if (is_in_emul()) {
 			unsigned long write_addr = QEMU_PRINTF_BUFF_BASE;
 			*(unsigned long *)write_addr = (unsigned long)((((unsigned long)sw64_printk_buf) & 0xffffffffUL)
 					| ((unsigned long)printed_len << 32));

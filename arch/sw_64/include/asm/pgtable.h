@@ -26,10 +26,18 @@ struct vm_area_struct;
  * hook is made available.
  */
 #define set_pte(pteptr, pteval) ((*(pteptr)) = (pteval))
-#define set_pte_at(mm, addr, ptep, pteval) set_pte(ptep, pteval)
+static inline void set_pte_at(struct mm_struct *mm, unsigned long addr,
+			      pte_t *ptep, pte_t pteval)
+{
+	set_pte(ptep, pteval);
+}
 
 #define set_pmd(pmdptr, pmdval) ((*(pmdptr)) = (pmdval))
-#define set_pmd_at(mm, addr, pmdp, pmdval) set_pmd(pmdp, pmdval)
+static inline void set_pmd_at(struct mm_struct *mm, unsigned long addr,
+			      pmd_t *pmdp, pmd_t pmdval)
+{
+	set_pmd(pmdp, pmdval);
+}
 
 /* PGDIR_SHIFT determines what a forth-level page table entry can map */
 #define PGDIR_SHIFT	(PAGE_SHIFT + 3 * (PAGE_SHIFT - 3))
@@ -81,6 +89,7 @@ struct vm_area_struct;
 #define _PAGE_PHU	0x0020  /* used for 256M page size bit */
 #define _PAGE_PSE	0x0040  /* used for 8M page size bit */
 #define _PAGE_PROTNONE	0x0080  /* used for numa page balancing */
+#define _PAGE_SPECIAL	0x0100
 #define _PAGE_KRE	0x0400	/* xxx - see below on the "accessed" bit */
 #define _PAGE_URE	0x0800	/* xxx */
 #define _PAGE_KWE	0x4000	/* used to do the dirty bit in software */
@@ -115,7 +124,7 @@ struct vm_area_struct;
 #define _PTE_FLAGS_BITS	(64 - _PFN_BITS)
 
 #define _PAGE_TABLE	(_PAGE_VALID | __DIRTY_BITS | __ACCESS_BITS)
-#define _PAGE_CHG_MASK	(_PFN_MASK | __DIRTY_BITS | __ACCESS_BITS)
+#define _PAGE_CHG_MASK	(_PFN_MASK | __DIRTY_BITS | __ACCESS_BITS | _PAGE_SPECIAL)
 #define _HPAGE_CHG_MASK (_PAGE_CHG_MASK | _PAGE_PSE | _PAGE_PHU)
 
 /*
@@ -448,6 +457,11 @@ static inline int pte_young(pte_t pte)
 	return pte_val(pte) & _PAGE_ACCESSED;
 }
 
+static inline int pte_special(pte_t pte)
+{
+	return pte_val(pte) & _PAGE_SPECIAL;
+}
+
 static inline pte_t pte_wrprotect(pte_t pte)
 {
 	pte_val(pte) |= _PAGE_FOW;
@@ -488,6 +502,12 @@ static inline pte_t pte_mkyoung(pte_t pte)
 static inline pte_t pte_mkhuge(pte_t pte)
 {
 	pte_val(pte) |= _PAGE_PSE;
+	return pte;
+}
+
+static inline pte_t pte_mkspecial(pte_t pte)
+{
+	pte_val(pte) |= _PAGE_SPECIAL;
 	return pte;
 }
 

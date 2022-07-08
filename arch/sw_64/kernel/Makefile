@@ -29,8 +29,7 @@ obj-$(CONFIG_SUSPEND)	+= suspend_asm.o suspend.o
 obj-$(CONFIG_PERF_EVENTS) += perf_event.o
 obj-$(CONFIG_HIBERNATION) += hibernate_asm.o hibernate.o
 obj-$(CONFIG_AUDIT)     += audit.o
-obj-$(CONFIG_DIRECT_DMA) += pci_common.o
-obj-$(CONFIG_SWIOTLB) += dma_swiotlb.o
+obj-$(CONFIG_PCI) += pci_common.o
 obj-$(CONFIG_RELOCATABLE)   += relocate.o
 obj-$(CONFIG_DEBUG_FS)	+= unaligned.o segvdbg.o
 obj-$(CONFIG_JUMP_LABEL) += jump_label.o
@@ -45,6 +44,8 @@ endif
 
 # Core logic support
 obj-$(CONFIG_SW64)	+= core.o timer.o
+obj-$(CONFIG_SW64_CPUFREQ) += platform.o clock.o
+obj-$(CONFIG_SW64_CPUAUTOPLUG) += cpuautoplug.o
 
 obj-$(CONFIG_CRASH_DUMP)    += crash_dump.o
 obj-$(CONFIG_KEXEC)		+= machine_kexec.o relocate_kernel.o

@@ -27,6 +27,7 @@
 #include <linux/scatterlist.h>
 #include <linux/blkzoned.h>
 #include <linux/pm.h>
+#include <linux/sbitmap.h>
 
 struct module;
 struct scsi_ioctl_command;

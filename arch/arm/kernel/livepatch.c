@@ -28,6 +28,8 @@
 #include <asm/stacktrace.h>
 #include <asm/cacheflush.h>
 #include <linux/slab.h>
+#include <linux/ptrace.h>
+#include <asm/traps.h>
 #include <asm/insn.h>
 #include <asm/patch.h>
 
@@ -73,6 +75,7 @@ struct klp_func_list {
 struct walk_stackframe_args {
 	int enable;
 	struct klp_func_list *check_funcs;
+	struct module *mod;
 	int ret;
 };
 
@@ -84,16 +87,6 @@ static inline unsigned long klp_size_to_check(unsigned long func_size,
 	if (force == KLP_STACK_OPTIMIZE && size > MAX_SIZE_TO_CHECK)
 		size = MAX_SIZE_TO_CHECK;
 	return size;
-}
-
-static inline int klp_compare_address(unsigned long pc, unsigned long func_addr,
-		const char *func_name, unsigned long check_size)
-{
-	if (pc >= func_addr && pc < func_addr + check_size) {
-		pr_err("func %s is in use!\n", func_name);
-		return -EBUSY;
-	}
-	return 0;
 }
 
 static bool check_jump_insn(unsigned long func_addr)
@@ -147,7 +140,7 @@ static int klp_check_activeness_func(struct klp_patch *patch, int enable,
 	for (obj = patch->objs; obj->funcs; obj++) {
 		for (func = obj->funcs; func->old_name; func++) {
 			if (enable) {
-				if (func->force == KLP_ENFORCEMENT)
+				if (func->patched || func->force == KLP_ENFORCEMENT)
 					continue;
 				/*
 				 * When enable, checking the currently
@@ -272,29 +265,18 @@ static void free_list(struct klp_func_list **funcs)
 	}
 }
 
-int klp_check_calltrace(struct klp_patch *patch, int enable)
+static int do_check_calltrace(struct walk_stackframe_args *args,
+			      int (*fn)(struct stackframe *, void *))
 {
 	struct task_struct *g, *t;
 	struct stackframe frame;
-	int ret = 0;
-	struct klp_func_list *check_funcs = NULL;
-	struct walk_stackframe_args args = {
-		.ret = 0
-	};
-
-	ret = klp_check_activeness_func(patch, enable, &check_funcs);
-	if (ret) {
-		pr_err("collect active functions failed, ret=%d\n", ret);
-		goto out;
-	}
-	args.check_funcs = check_funcs;
 
 	for_each_process_thread(g, t) {
 		if (t == current) {
 			frame.fp = (unsigned long)__builtin_frame_address(0);
 			frame.sp = current_stack_pointer;
 			frame.lr = (unsigned long)__builtin_return_address(0);
-			frame.pc = (unsigned long)klp_check_calltrace;
+			frame.pc = (unsigned long)do_check_calltrace;
 		} else if (strncmp(t->comm, "migration/", 10) == 0) {
 			/*
 			 * current on other CPU
@@ -312,21 +294,104 @@ int klp_check_calltrace(struct klp_patch *patch, int enable)
 			frame.lr = 0;           /* recovered from the stack */
 			frame.pc = thread_saved_pc(t);
 		}
-		if (check_funcs != NULL) {
-			walk_stackframe(&frame, klp_check_jump_func, &args);
-			if (args.ret) {
-				ret = args.ret;
-				pr_info("PID: %d Comm: %.20s\n", t->pid, t->comm);
-				show_stack(t, NULL, KERN_INFO);
-				goto out;
-			}
+		walk_stackframe(&frame, fn, args);
+		if (args->ret) {
+			pr_info("PID: %d Comm: %.20s\n", t->pid, t->comm);
+			show_stack(t, NULL, KERN_INFO);
+			return args->ret;
 		}
 	}
+	return 0;
+}
+
+int klp_check_calltrace(struct klp_patch *patch, int enable)
+{
+	int ret = 0;
+	struct klp_func_list *check_funcs = NULL;
+	struct walk_stackframe_args args = {
+		.enable = enable,
+		.ret = 0
+	};
+
+	ret = klp_check_activeness_func(patch, enable, &check_funcs);
+	if (ret) {
+		pr_err("collect active functions failed, ret=%d\n", ret);
+		goto out;
+	}
+	if (!check_funcs)
+		goto out;
+
+	args.check_funcs = check_funcs;
+	ret = do_check_calltrace(&args, klp_check_jump_func);
 
 out:
 	free_list(&check_funcs);
 	return ret;
 }
+
+static int check_module_calltrace(struct stackframe *frame, void *data)
+{
+	struct walk_stackframe_args *args = data;
+
+	if (within_module_core(frame->pc, args->mod)) {
+		pr_err("module %s is in use!\n", args->mod->name);
+		return (args->ret = -EBUSY);
+	}
+	return 0;
+}
+
+int arch_klp_module_check_calltrace(void *data)
+{
+	struct walk_stackframe_args args = {
+		.mod = (struct module *)data,
+		.ret = 0
+	};
+
+	return do_check_calltrace(&args, check_module_calltrace);
+}
+
+int arch_klp_add_breakpoint(struct arch_klp_data *arch_data, void *old_func)
+{
+	u32 *addr = (u32 *)old_func;
+
+	arch_data->saved_opcode = le32_to_cpu(*addr);
+	patch_text(old_func, KLP_ARM_BREAKPOINT_INSTRUCTION);
+	return 0;
+}
+
+void arch_klp_remove_breakpoint(struct arch_klp_data *arch_data, void *old_func)
+{
+	patch_text(old_func, arch_data->saved_opcode);
+}
+
+static int klp_trap_handler(struct pt_regs *regs, unsigned int instr)
+{
+	void *brk_func = NULL;
+	unsigned long addr = regs->ARM_pc;
+
+	brk_func = klp_get_brk_func((void *)addr);
+	if (!brk_func) {
+		pr_warn("Unrecoverable livepatch detected.\n");
+		BUG();
+	}
+
+	regs->ARM_pc = (unsigned long)brk_func;
+	return 0;
+}
+
+static struct undef_hook klp_arm_break_hook = {
+	.instr_mask	= 0x0fffffff,
+	.instr_val	= (KLP_ARM_BREAKPOINT_INSTRUCTION & 0x0fffffff),
+	.cpsr_mask	= MODE_MASK,
+	.cpsr_val	= SVC_MODE,
+	.fn		= klp_trap_handler,
+};
+
+void arch_klp_init(void)
+{
+	register_undef_hook(&klp_arm_break_hook);
+}
+
 #endif
 
 static inline bool offset_in_range(unsigned long pc, unsigned long addr,

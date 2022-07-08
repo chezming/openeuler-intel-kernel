@@ -4556,6 +4556,53 @@ static void mem_cgroup_oom_unregister_event(struct mem_cgroup *memcg,
 	spin_unlock(&memcg_oom_lock);
 }
 
+static const char *const memcg_flag_name[] = {
+	"NO_REF",
+	"ONLINE",
+	"RELEASED",
+	"VISIBLE",
+	"DYING"
+};
+
+static void memcg_flag_stat_get(int mem_flags, int *stat)
+{
+	int i;
+	int flags = mem_flags;
+
+	for (i = 0; i < ARRAY_SIZE(memcg_flag_name); i++) {
+		if (flags & 1)
+			stat[i] += 1;
+		flags >>= 1;
+	}
+}
+
+static int memcg_flag_stat_show(struct seq_file *sf, void *v)
+{
+	int self_flag[ARRAY_SIZE(memcg_flag_name)];
+	int child_flag[ARRAY_SIZE(memcg_flag_name)];
+	int iter;
+	struct cgroup_subsys_state *child;
+	struct cgroup_subsys_state *css = seq_css(sf);
+
+	memset(self_flag, 0, sizeof(self_flag));
+	memset(child_flag, 0, sizeof(child_flag));
+
+	memcg_flag_stat_get(css->flags, self_flag);
+
+	rcu_read_lock();
+	css_for_each_child(child, css)
+		memcg_flag_stat_get(child->flags, child_flag);
+	rcu_read_unlock();
+
+	for (iter = 0; iter < ARRAY_SIZE(memcg_flag_name); iter++)
+		seq_printf(sf, "%s %d\n", memcg_flag_name[iter], self_flag[iter]);
+
+	for (iter = 0; iter < ARRAY_SIZE(memcg_flag_name); iter++)
+		seq_printf(sf, "CHILD_%s %d\n", memcg_flag_name[iter], child_flag[iter]);
+
+	return 0;
+}
+
 static int mem_cgroup_oom_control_read(struct seq_file *sf, void *v)
 {
 	struct mem_cgroup *memcg = mem_cgroup_from_seq(sf);
@@ -5152,6 +5199,49 @@ static int memcg_events_local_show(struct seq_file *m, void *v)
 	return 0;
 }
 
+static ssize_t memory_reclaim(struct kernfs_open_file *of, char *buf,
+			      size_t nbytes, loff_t off)
+{
+	struct mem_cgroup *memcg = mem_cgroup_from_css(of_css(of));
+	unsigned int nr_retries = MAX_RECLAIM_RETRIES;
+	unsigned long nr_to_reclaim, nr_reclaimed = 0;
+	int err;
+
+	buf = strstrip(buf);
+	err = page_counter_memparse(buf, "", &nr_to_reclaim);
+	if (err)
+		return err;
+
+	if (!cgroup_subsys_on_dfl(memory_cgrp_subsys) &&
+			mem_cgroup_is_root(memcg))
+		return -EINVAL;
+
+	while (nr_reclaimed < nr_to_reclaim) {
+		unsigned long reclaimed;
+
+		if (signal_pending(current))
+			return -EINTR;
+
+		/* This is the final attempt, drain percpu lru caches in the
+		 * hope of introducing more evictable pages for
+		 * try_to_free_mem_cgroup_pages().
+		 */
+		if (!nr_retries)
+			lru_add_drain_all();
+
+		reclaimed = try_to_free_mem_cgroup_pages(memcg,
+						nr_to_reclaim - nr_reclaimed,
+						GFP_KERNEL, true);
+
+		if (!reclaimed && !nr_retries--)
+			return -EAGAIN;
+
+		nr_reclaimed += reclaimed;
+	}
+
+	return nbytes;
+}
+
 static struct cftype mem_cgroup_legacy_files[] = {
 	{
 		.name = "usage_in_bytes",
@@ -5215,6 +5305,10 @@ static struct cftype mem_cgroup_legacy_files[] = {
 		.seq_show = mem_cgroup_oom_control_read,
 		.write_u64 = mem_cgroup_oom_control_write,
 		.private = MEMFILE_PRIVATE(_OOM_TYPE, OOM_CONTROL),
+	},
+	{
+		.name = "flag_stat",
+		.seq_show = memcg_flag_stat_show,
 	},
 	{
 		.name = "pressure_level",
@@ -5344,6 +5438,10 @@ static struct cftype mem_cgroup_legacy_files[] = {
 		.flags = CFTYPE_NOT_ON_ROOT,
 		.file_offset = offsetof(struct mem_cgroup, events_local_file),
 		.seq_show = memcg_events_local_show,
+	},
+	{
+		.name = "reclaim",
+		.write = memory_reclaim,
 	},
 	{ },	/* terminate */
 };
@@ -6769,6 +6867,11 @@ static struct cftype memory_files[] = {
 		.seq_show = memory_oom_group_show,
 		.write = memory_oom_group_write,
 	},
+	{
+		.name = "reclaim",
+		.flags = CFTYPE_NS_DELEGATABLE,
+		.write = memory_reclaim,
+	},
 	{ }	/* terminate */
 };
 
@@ -7357,7 +7460,7 @@ static int __init cgroup_memory(char *s)
 		else if (!strcmp(token, "kmem"))
 			cgroup_memory_nokmem = false;
 	}
-	return 0;
+	return 1;
 }
 __setup("cgroup.memory=", cgroup_memory);
 

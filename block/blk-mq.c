@@ -1627,8 +1627,16 @@ static void __blk_mq_delay_run_hw_queue(struct blk_mq_hw_ctx *hctx, bool async,
 		put_cpu();
 	}
 
+	/*
+	 * No need to queue work if there is no io, and this can avoid race
+	 * with blk_cleanup_queue().
+	 */
+	if (!percpu_ref_tryget(&hctx->queue->q_usage_counter))
+		return;
+
 	kblockd_mod_delayed_work_on(blk_mq_hctx_next_cpu(hctx), &hctx->run_work,
 				    msecs_to_jiffies(msecs));
+	percpu_ref_put(&hctx->queue->q_usage_counter);
 }
 
 /**
@@ -2729,8 +2737,9 @@ static void blk_mq_exit_hctx(struct request_queue *q,
 		blk_mq_dtag_idle(hctx, true);
 	}
 
-	blk_mq_clear_flush_rq_mapping(set->tags[hctx_idx],
-			set->queue_depth, flush_rq);
+	if (blk_queue_init_done(q))
+		blk_mq_clear_flush_rq_mapping(set->tags[hctx_idx],
+				set->queue_depth, flush_rq);
 	if (set->ops->exit_request)
 		set->ops->exit_request(set, flush_rq, hctx_idx);
 
@@ -3621,7 +3630,7 @@ int blk_mq_alloc_tag_set(struct blk_mq_tag_set *set)
 		atomic_set(&set->active_queues_shared_sbitmap, 0);
 		atomic_set(&set->pending_queues_shared_sbitmap, 0);
 
-		if (blk_mq_init_shared_sbitmap(set, set->flags)) {
+		if (blk_mq_init_shared_sbitmap(set)) {
 			ret = -ENOMEM;
 			goto out_free_mq_rq_maps;
 		}
@@ -3671,6 +3680,7 @@ int blk_mq_update_nr_requests(struct request_queue *q, unsigned int nr)
 	struct blk_mq_tag_set *set = q->tag_set;
 	struct blk_mq_hw_ctx *hctx;
 	int i, ret;
+	struct request_queue_wrapper *q_wrapper = queue_to_wrapper(q);
 
 	if (!set)
 		return -EINVAL;
@@ -3697,15 +3707,24 @@ int blk_mq_update_nr_requests(struct request_queue *q, unsigned int nr)
 		} else {
 			ret = blk_mq_tag_update_depth(hctx, &hctx->sched_tags,
 							nr, true);
+			if (blk_mq_is_sbitmap_shared(set->flags)) {
+				hctx->sched_tags->bitmap_tags =
+					&q_wrapper->sched_bitmap_tags;
+				hctx->sched_tags->breserved_tags =
+					&q_wrapper->sched_breserved_tags;
+			}
 		}
 		if (ret)
 			break;
 		if (q->elevator && q->elevator->type->ops.depth_updated)
 			q->elevator->type->ops.depth_updated(hctx);
 	}
-
-	if (!ret)
+	if (!ret) {
 		q->nr_requests = nr;
+		if (q->elevator && blk_mq_is_sbitmap_shared(set->flags))
+			sbitmap_queue_resize(&q_wrapper->sched_bitmap_tags,
+					     nr - set->reserved_tags);
+	}
 
 	blk_mq_unquiesce_queue(q);
 	blk_mq_unfreeze_queue(q);

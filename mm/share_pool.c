@@ -16,7 +16,6 @@
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  */
-
 #define pr_fmt(fmt) "share pool: " fmt
 
 #include <linux/share_pool.h>
@@ -2157,6 +2156,7 @@ struct sp_alloc_context {
 	bool need_fallocate;
 	struct timespec64 start;
 	struct timespec64 end;
+	bool have_mbind;
 };
 
 static void trace_sp_alloc_begin(struct sp_alloc_context *ac)
@@ -2298,6 +2298,7 @@ static int sp_alloc_prepare(unsigned long size, unsigned long sp_flags,
 	ac->sp_flags = sp_flags;
 	ac->state = ALLOC_NORMAL;
 	ac->need_fallocate = false;
+	ac->have_mbind = false;
 	return 0;
 }
 
@@ -2391,7 +2392,7 @@ static void sp_alloc_fallback(struct sp_area *spa, struct sp_alloc_context *ac)
 }
 
 static int sp_alloc_populate(struct mm_struct *mm, struct sp_area *spa,
-	struct sp_group_node *spg_node, struct sp_alloc_context *ac)
+			     struct sp_alloc_context *ac)
 {
 	int ret = 0;
 	unsigned long sp_addr = spa->va_start;
@@ -2423,23 +2424,18 @@ static int sp_alloc_populate(struct mm_struct *mm, struct sp_area *spa,
 		if (ret)
 			sp_add_work_compact();
 	}
-	if (ret) {
-		if (spa->spg != spg_none)
-			sp_alloc_unmap(list_next_entry(spg_node, proc_node)->master->mm, spa, spg_node);
-		else
-			sp_munmap(mm, spa->va_start, spa->real_size);
-
-		if (unlikely(fatal_signal_pending(current)))
-			pr_warn_ratelimited("allocation failed, current thread is killed\n");
-		else
-			pr_warn_ratelimited("allocation failed due to mm populate failed(potential no enough memory when -12): %d\n",
-					    ret);
-		sp_fallocate(spa);  /* need this, otherwise memleak */
-		sp_alloc_fallback(spa, ac);
-	} else {
-		ac->need_fallocate = true;
-	}
 	return ret;
+}
+
+static long sp_mbind(struct mm_struct *mm, unsigned long start, unsigned long len,
+		unsigned long node)
+{
+	nodemask_t nmask;
+
+	nodes_clear(nmask);
+	node_set(node, nmask);
+	return __do_mbind(start, len, MPOL_BIND, MPOL_F_STATIC_NODES,
+			&nmask, MPOL_MF_STRICT, mm);
 }
 
 static int __sp_alloc_mmap_populate(struct mm_struct *mm, struct sp_area *spa,
@@ -2457,7 +2453,34 @@ static int __sp_alloc_mmap_populate(struct mm_struct *mm, struct sp_area *spa,
 		return ret;
 	}
 
-	ret = sp_alloc_populate(mm, spa, spg_node, ac);
+	if (!ac->have_mbind) {
+		ret = sp_mbind(mm, spa->va_start, spa->real_size, spa->node_id);
+		if (ret < 0) {
+			pr_err("cannot bind the memory range to specified node:%d, err:%d\n",
+				spa->node_id, ret);
+			goto err;
+		}
+		ac->have_mbind = true;
+	}
+
+	ret = sp_alloc_populate(mm, spa, ac);
+	if (ret) {
+err:
+		if (spa->spg != spg_none)
+			sp_alloc_unmap(list_next_entry(spg_node, proc_node)->master->mm, spa, spg_node);
+		else
+			sp_munmap(mm, spa->va_start, spa->real_size);
+
+		if (unlikely(fatal_signal_pending(current)))
+			pr_warn_ratelimited("allocation failed, current thread is killed\n");
+		else
+			pr_warn_ratelimited("allocation failed due to mm populate failed(potential no enough memory when -12): %d\n",
+					    ret);
+		sp_fallocate(spa);  /* need this, otherwise memleak */
+		sp_alloc_fallback(spa, ac);
+	} else
+		ac->need_fallocate = true;
+
 	return ret;
 }
 
@@ -2479,11 +2502,6 @@ static int sp_alloc_mmap_populate(struct sp_area *spa,
 			if (mmap_ret) {
 				if (ac->state != ALLOC_COREDUMP)
 					return mmap_ret;
-				if (ac->spg == spg_none) {
-					sp_alloc_unmap(mm, spa, spg_node);
-					pr_err("dvpp allocation failed due to coredump");
-					return mmap_ret;
-				}
 				ac->state = ALLOC_NORMAL;
 				continue;
 			}
@@ -4042,9 +4060,9 @@ void spg_overview_show(struct seq_file *seq)
 			atomic_read(&sp_overall_stat.spa_total_num));
 	}
 
-	down_read(&sp_group_sem);
+	down_read(&sp_spg_stat_sem);
 	idr_for_each(&sp_spg_stat_idr, idr_spg_stat_cb, seq);
-	up_read(&sp_group_sem);
+	up_read(&sp_spg_stat_sem);
 
 	if (seq != NULL)
 		seq_puts(seq, "\n");
@@ -4083,7 +4101,6 @@ static int idr_proc_stat_cb(int id, void *p, void *data)
 	long sp_res, sp_res_nsize, non_sp_res, non_sp_shm;
 
 	/* to prevent ABBA deadlock, first hold sp_group_sem */
-	down_read(&sp_group_sem);
 	mutex_lock(&spg_stat->lock);
 	hash_for_each(spg_stat->hash, i, spg_proc_stat, gnode) {
 		proc_stat = spg_proc_stat->proc_stat;
@@ -4112,7 +4129,6 @@ static int idr_proc_stat_cb(int id, void *p, void *data)
 		seq_putc(seq, '\n');
 	}
 	mutex_unlock(&spg_stat->lock);
-	up_read(&sp_group_sem);
 	return 0;
 }
 
@@ -4130,10 +4146,16 @@ static int proc_stat_show(struct seq_file *seq, void *offset)
 		   byte2kb(atomic64_read(&kthread_stat.alloc_size)),
 		   byte2kb(atomic64_read(&kthread_stat.k2u_size)));
 
-	/* pay attention to potential ABBA deadlock */
+	/*
+	 * This ugly code is just for fixing the ABBA deadlock against
+	 * sp_group_add_task.
+	 */
+	down_read(&sp_group_sem);
 	down_read(&sp_spg_stat_sem);
 	idr_for_each(&sp_spg_stat_idr, idr_proc_stat_cb, seq);
 	up_read(&sp_spg_stat_sem);
+	up_read(&sp_group_sem);
+
 	return 0;
 }
 

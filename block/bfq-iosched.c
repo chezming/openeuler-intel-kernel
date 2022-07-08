@@ -1871,7 +1871,11 @@ static void bfq_add_request(struct request *rq)
 
 	bfq_log_bfqq(bfqd, bfqq, "add_request %d", rq_is_sync(rq));
 	bfqq->queued[rq_is_sync(rq)]++;
-	bfqd->queued++;
+	/*
+	 * Updating of 'bfqd->queued' is protected by 'bfqd->lock', however, it
+	 * may be read without holding the lock in bfq_has_work().
+	 */
+	WRITE_ONCE(bfqd->queued, bfqd->queued + 1);
 
 	if (RB_EMPTY_ROOT(&bfqq->sort_list) && bfq_bfqq_sync(bfqq)) {
 		/*
@@ -2164,7 +2168,11 @@ static void bfq_remove_request(struct request_queue *q,
 	if (rq->queuelist.prev != &rq->queuelist)
 		list_del_init(&rq->queuelist);
 	bfqq->queued[sync]--;
-	bfqd->queued--;
+	/*
+	 * Updating of 'bfqd->queued' is protected by 'bfqd->lock', however, it
+	 * may be read without holding the lock in bfq_has_work().
+	 */
+	WRITE_ONCE(bfqd->queued, bfqd->queued - 1);
 	elv_rb_del(&bfqq->sort_list, rq);
 
 	elv_rqhash_del(q, rq);
@@ -2534,6 +2542,15 @@ bfq_setup_merge(struct bfq_queue *bfqq, struct bfq_queue *new_bfqq)
 	 * are likely to increase the throughput.
 	 */
 	bfqq->new_bfqq = new_bfqq;
+	/*
+	 * The above assignment schedules the following redirections:
+	 * each time some I/O for bfqq arrives, the process that
+	 * generated that I/O is disassociated from bfqq and
+	 * associated with new_bfqq. Here we increases new_bfqq->ref
+	 * in advance, adding the number of processes that are
+	 * expected to be associated with new_bfqq as they happen to
+	 * issue I/O.
+	 */
 	new_bfqq->ref += process_refs;
 	return new_bfqq;
 }
@@ -2593,6 +2610,10 @@ bfq_setup_cooperator(struct bfq_data *bfqd, struct bfq_queue *bfqq,
 {
 	struct bfq_queue *in_service_bfqq, *new_bfqq;
 
+	/* if a merge has already been setup, then proceed with that first */
+	if (bfqq->new_bfqq)
+		return bfqq->new_bfqq;
+
 	/*
 	 * Do not perform queue merging if the device is non
 	 * rotational and performs internal queueing. In fact, such a
@@ -2646,9 +2667,6 @@ bfq_setup_cooperator(struct bfq_data *bfqd, struct bfq_queue *bfqq,
 	 */
 	if (bfq_too_late_for_merging(bfqq))
 		return NULL;
-
-	if (bfqq->new_bfqq)
-		return bfqq->new_bfqq;
 
 	if (!io_struct || unlikely(bfqq == &bfqd->oom_bfqq))
 		return NULL;
@@ -4652,11 +4670,11 @@ static bool bfq_has_work(struct blk_mq_hw_ctx *hctx)
 	struct bfq_data *bfqd = hctx->queue->elevator->elevator_data;
 
 	/*
-	 * Avoiding lock: a race on bfqd->busy_queues should cause at
+	 * Avoiding lock: a race on bfqd->queued should cause at
 	 * most a call to dispatch for nothing
 	 */
 	return !list_empty_careful(&bfqd->dispatch) ||
-		bfq_tot_busy_queues(bfqd) > 0;
+		READ_ONCE(bfqd->queued);
 }
 
 static struct request *__bfq_dispatch_request(struct blk_mq_hw_ctx *hctx)
