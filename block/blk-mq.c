@@ -102,6 +102,61 @@ struct mq_inflight {
 	unsigned int inflight[2];
 };
 
+#ifdef CONFIG_64BIT
+static bool blk_mq_check_inflight_with_stat(struct blk_mq_hw_ctx *hctx,
+					    struct request *rq, void *priv,
+					    bool reserved)
+{
+	struct mq_inflight *mi = priv;
+
+	if ((!mi->part->partno || rq->part == mi->part) &&
+	    blk_mq_rq_state(rq) == MQ_RQ_IN_FLIGHT) {
+		u64 stat_time;
+		struct request_wrapper *rq_wrapper;
+
+		mi->inflight[rq_data_dir(rq)]++;
+		if (!rq->part)
+			return true;
+
+		/*
+		 * If the request is started after 'part->stat_time' is set,
+		 * don't update 'nsces' here.
+		 */
+		if (rq->part->stat_time <= rq->start_time_ns)
+			return true;
+
+		rq_wrapper = request_to_wrapper(rq);
+		stat_time = READ_ONCE(rq_wrapper->stat_time_ns);
+		/*
+		 * This might fail if 'stat_time_ns' is updated in
+		 * blk_account_io_done().
+		 */
+		if (likely(rq->part->stat_time > stat_time &&
+			   cmpxchg64(&rq_wrapper->stat_time_ns, stat_time,
+				     rq->part->stat_time) == stat_time)) {
+			int sgrp = op_stat_group(req_op(rq));
+			u64 duation = stat_time ?
+				rq->part->stat_time - stat_time :
+				rq->part->stat_time - rq->start_time_ns;
+
+			part_stat_add(rq->part, nsecs[sgrp], duation);
+		}
+	}
+
+	return true;
+}
+
+unsigned int blk_mq_in_flight_with_stat(struct request_queue *q,
+					struct hd_struct *part)
+{
+	struct mq_inflight mi = { .part = part };
+
+	blk_mq_queue_tag_busy_iter(q, blk_mq_check_inflight_with_stat, &mi);
+
+	return mi.inflight[0] + mi.inflight[1];
+}
+#endif
+
 static bool blk_mq_check_inflight(struct blk_mq_hw_ctx *hctx,
 				  struct request *rq, void *priv,
 				  bool reserved)
@@ -324,6 +379,7 @@ static struct request *blk_mq_rq_ctx_init(struct blk_mq_alloc_data *data,
 #ifdef CONFIG_BLK_RQ_ALLOC_TIME
 	rq->alloc_time_ns = alloc_time_ns;
 #endif
+	request_to_wrapper(rq)->stat_time_ns = 0;
 	if (blk_mq_need_time_stamp(rq))
 		rq->start_time_ns = ktime_get_ns();
 	else
@@ -2510,7 +2566,7 @@ int blk_mq_alloc_rqs(struct blk_mq_tag_set *set, struct blk_mq_tags *tags,
 	 * rq_size is the size of the request plus driver payload, rounded
 	 * to the cacheline size
 	 */
-	rq_size = round_up(sizeof(struct request) + set->cmd_size,
+	rq_size = round_up(sizeof(struct request_wrapper) + set->cmd_size,
 				cache_line_size());
 	left = rq_size * depth;
 

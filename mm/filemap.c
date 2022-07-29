@@ -1951,7 +1951,11 @@ unsigned find_lock_entries(struct address_space *mapping, pgoff_t start,
 
 	rcu_read_lock();
 	while ((page = find_get_entry(&xas, end, XA_PRESENT))) {
+		unsigned long next_idx = xas.xa_index + 1;
+
 		if (!xa_is_value(page)) {
+			if (PageTransHuge(page))
+				next_idx = page->index + thp_nr_pages(page);
 			if (page->index < start)
 				goto put;
 			VM_BUG_ON_PAGE(page->index != xas.xa_index, page);
@@ -1973,13 +1977,11 @@ unlock:
 put:
 		put_page(page);
 next:
-		if (!xa_is_value(page) && PageTransHuge(page)) {
-			unsigned int nr_pages = thp_nr_pages(page);
-
+		if (next_idx != xas.xa_index + 1) {
 			/* Final THP may cross MAX_LFS_FILESIZE on 32-bit */
-			xas_set(&xas, page->index + nr_pages);
-			if (xas.xa_index < nr_pages)
+			if (next_idx < xas.xa_index)
 				break;
+			xas_set(&xas, next_idx);
 		}
 	}
 	rcu_read_unlock();
@@ -2435,6 +2437,13 @@ got_pages:
 	goto find_page;
 }
 
+static inline bool pos_same_page(loff_t pos1, loff_t pos2, struct page *page)
+{
+	unsigned int shift = page_shift(page);
+
+	return (pos1 >> shift == pos2 >> shift);
+}
+
 /**
  * generic_file_buffered_read - generic file read routine
  * @iocb:	the iocb to read
@@ -2525,11 +2534,10 @@ ssize_t generic_file_buffered_read(struct kiocb *iocb,
 		writably_mapped = mapping_writably_mapped(mapping);
 
 		/*
-		 * When a sequential read accesses a page several times, only
+		 * When a read accesses a page several times, only
 		 * mark it as accessed the first time.
 		 */
-		if (iocb->ki_pos >> PAGE_SHIFT !=
-		    ra->prev_pos >> PAGE_SHIFT)
+		if (pos_same_page(iocb->ki_pos, ra->prev_pos -1, pages[0]))
 			mark_page_accessed(pages[0]);
 		for (i = 1; i < pg_nr; i++)
 			mark_page_accessed(pages[i]);
@@ -3510,10 +3518,6 @@ again:
 		 * Otherwise there's a nasty deadlock on copying from the
 		 * same page as we're writing to, without it being marked
 		 * up-to-date.
-		 *
-		 * Not only is this an optimisation, but it is also required
-		 * to check that the address is actually valid, when atomic
-		 * usercopies are used, below.
 		 */
 		if (unlikely(iov_iter_fault_in_readable(i, bytes))) {
 			status = -EFAULT;
@@ -3540,24 +3544,22 @@ again:
 						page, fsdata);
 		if (unlikely(status < 0))
 			break;
-		copied = status;
 
 		cond_resched();
 
-		iov_iter_advance(i, copied);
-		if (unlikely(copied == 0)) {
+		if (unlikely(status == 0)) {
 			/*
-			 * If we were unable to copy any data at all, we must
-			 * fall back to a single segment length write.
-			 *
-			 * If we didn't fallback here, we could livelock
-			 * because not all segments in the iov can be copied at
-			 * once without a pagefault.
+			 * A short copy made ->write_end() reject the
+			 * thing entirely.  Might be memory poisoning
+			 * halfway through, might be a race with munmap,
+			 * might be severe memory pressure.
 			 */
-			bytes = min_t(unsigned long, PAGE_SIZE - offset,
-						iov_iter_single_seg_count(i));
+			if (copied)
+				bytes = copied;
 			goto again;
 		}
+		copied = status;
+		iov_iter_advance(i, copied);
 		pos += copied;
 		written += copied;
 

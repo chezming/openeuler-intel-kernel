@@ -1593,14 +1593,17 @@
 			Format: size[KMG]
 
 	hugetlb_free_vmemmap=
-			[KNL] Reguires CONFIG_HUGETLB_PAGE_FREE_VMEMMAP
+			[KNL] Reguires CONFIG_HUGETLB_PAGE_OPTIMIZE_VMEMMAP
 			enabled.
 			Allows heavy hugetlb users to free up some more
-			memory (6 * PAGE_SIZE for each 2MB hugetlb page).
-			Format: { on | off (default) }
+			memory (7 * PAGE_SIZE for each 2MB hugetlb page).
+			Format: { [oO][Nn]/Y/y/1 | [oO][Ff]/N/n/0 (default) }
 
-			on:  enable the feature
-			off: disable the feature
+			[oO][Nn]/Y/y/1: enable the feature
+			[oO][Ff]/N/n/0: disable the feature
+
+			Built with CONFIG_HUGETLB_PAGE_OPTIMIZE_VMEMMAP_DEFAULT_ON=y,
+			the default is on.
 
 	hugevmalloc	[KNL,PPC,ARM64,X86] Requires CONFIG_HAVE_ARCH_HUGE_VMALLOC
 			Format: { on | off }
@@ -5275,26 +5278,44 @@
 	spia_peddr=
 
 	split_lock_detect=
-			[X86] Enable split lock detection
+			[X86] Enable split lock detection or bus lock detection
 
 			When enabled (and if hardware support is present), atomic
 			instructions that access data across cache line
-			boundaries will result in an alignment check exception.
+			boundaries will result in an alignment check exception
+			for split lock detection or a debug exception for
+			bus lock detection.
 
 			off	- not enabled
 
-			warn	- the kernel will emit rate limited warnings
+			warn	- the kernel will emit rate-limited warnings
 				  about applications triggering the #AC
-				  exception. This mode is the default on CPUs
-				  that supports split lock detection.
+				  exception or the #DB exception. This mode is
+				  the default on CPUs that support split lock
+				  detection or bus lock detection. Default
+				  behavior is by #AC if both features are
+				  enabled in hardware.
 
 			fatal	- the kernel will send SIGBUS to applications
-				  that trigger the #AC exception.
+				  that trigger the #AC exception or the #DB
+				  exception. Default behavior is by #AC if
+				  both features are enabled in hardware.
+
+			ratelimit:N -
+				  Set system wide rate limit to N bus locks
+				  per second for bus lock detection.
+				  0 < N <= 1000.
+
+				  N/A for split lock detection.
+
 
 			If an #AC exception is hit in the kernel or in
 			firmware (i.e. not while executing in user mode)
 			the kernel will oops in either "warn" or "fatal"
 			mode.
+
+			#DB exception for bus lock is triggered only when
+			CPL > 0.
 
 	srbds=		[X86,INTEL]
 			Control the Special Register Buffer Data Sampling
