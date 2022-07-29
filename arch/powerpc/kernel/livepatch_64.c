@@ -67,12 +67,6 @@ struct klp_func_list {
 	int force;
 };
 
-struct stackframe {
-	unsigned long sp;
-	unsigned long pc;
-	unsigned long nip;
-};
-
 struct walk_stackframe_args {
 	int enable;
 	struct klp_func_list *check_funcs;
@@ -246,50 +240,6 @@ static int klp_check_activeness_func(struct klp_patch *patch, int enable,
 	return 0;
 }
 
-static int unwind_frame(struct task_struct *tsk, struct stackframe *frame)
-{
-
-	unsigned long *stack;
-
-	if (!validate_sp(frame->sp, tsk, STACK_FRAME_OVERHEAD))
-		return -1;
-
-	if (frame->nip != 0)
-		frame->nip = 0;
-
-	stack = (unsigned long *)frame->sp;
-
-	/*
-	 * When switching to the exception stack,
-	 * we save the NIP in pt_regs
-	 *
-	 * See if this is an exception frame.
-	 * We look for the "regshere" marker in the current frame.
-	 */
-	if (validate_sp(frame->sp, tsk, STACK_INT_FRAME_SIZE)
-	    && stack[STACK_FRAME_MARKER] == STACK_FRAME_REGS_MARKER) {
-		struct pt_regs *regs = (struct pt_regs *)
-			(frame->sp + STACK_FRAME_OVERHEAD);
-		frame->nip = regs->nip;
-		pr_debug("--- interrupt: task = %d/%s, trap %lx at NIP=x%lx/%pS, LR=0x%lx/%pS\n",
-			tsk->pid, tsk->comm, regs->trap,
-			regs->nip, (void *)regs->nip,
-			regs->link, (void *)regs->link);
-	}
-
-	frame->sp = stack[0];
-	frame->pc = stack[STACK_FRAME_LR_SAVE];
-#ifdef CONFIG_FUNCTION_GRAPH_TRACE
-	/*
-	 * IMHO these tests do not belong in
-	 * arch-dependent code, they are generic.
-	 */
-	frame->pc = ftrace_graph_ret_addr(tsk, &ftrace_idx, frame->ip, stack);
-#endif
-
-	return 0;
-}
-
 static void notrace klp_walk_stackframe(struct stackframe *frame,
 		int (*fn)(struct stackframe *, void *),
 		struct task_struct *tsk, void *data)
@@ -299,7 +249,7 @@ static void notrace klp_walk_stackframe(struct stackframe *frame,
 
 		if (fn(frame, data))
 			break;
-		ret = unwind_frame(tsk, frame);
+		ret = klp_unwind_frame(tsk, frame);
 		if (ret < 0)
 			break;
 	}
@@ -323,9 +273,14 @@ static int klp_check_jump_func(struct stackframe *frame, void *data)
 	struct walk_stackframe_args *args = data;
 	struct klp_func_list *check_funcs = args->check_funcs;
 
-	if (!check_func_list(check_funcs, &args->ret, frame->pc)) {
+	/* check the PC first */
+	if (!check_func_list(check_funcs, &args->ret, frame->pc))
 		return args->ret;
-	}
+
+	/* check NIP when the exception stack switching */
+	if (frame->nip && !check_func_list(check_funcs, &args->ret, frame->nip))
+		return args->ret;
+
 	return 0;
 }
 
@@ -427,11 +382,19 @@ static int check_module_calltrace(struct stackframe *frame, void *data)
 {
 	struct walk_stackframe_args *args = data;
 
-	if (within_module_core(frame->pc, args->mod)) {
-		pr_err("module %s is in use!\n", args->mod->name);
-		return (args->ret = -EBUSY);
-	}
+	/* check the PC first */
+	if (within_module_core(frame->pc, args->mod))
+		goto err_out;
+
+	/* check NIP when the exception stack switching */
+	if (frame->nip && within_module_core(frame->nip, args->mod))
+		goto err_out;
+
 	return 0;
+
+err_out:
+	pr_err("module %s is in use!\n", args->mod->name);
+	return (args->ret = -EBUSY);
 }
 
 int arch_klp_module_check_calltrace(void *data)

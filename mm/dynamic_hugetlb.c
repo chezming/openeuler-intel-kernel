@@ -1133,17 +1133,6 @@ void __init dynamic_hugetlb_init(void)
 	if (!enable_dhugetlb)
 		return;
 
-	/*
-	 * The dynamic_hugetlb feature need to split and merge pages frequently.
-	 * hugetlb_vmemmap will affects the perforemance of page split and merge.
-	 * If want to use dynamic hugetlb, please disable hugetlb_vmemmap.
-	 */
-	if (hugetlb_free_vmemmap_enabled) {
-		enable_dhugetlb = false;
-		pr_info("Please set hugetlb_free_vmemmap=off if want to enable dynamic hugetlb\n");
-		return;
-	}
-
 	count = max(hugepage_index(max_pfn), (unsigned long)DEFAULT_PAGELIST_COUNT);
 	size = sizeof(struct dhugetlb_pagelist) + count * sizeof(struct dhugetlb_pool *);
 	dhugetlb_pagelist_t = kzalloc(size, GFP_KERNEL);
@@ -1161,6 +1150,6 @@ static int __init dynamic_hugetlb_setup(char *s)
 {
 	if (!strcmp(s, "on"))
 		enable_dhugetlb = true;
-	return 1;
+	return 0;
 }
-__setup("dynamic_hugetlb=", dynamic_hugetlb_setup);
+early_param("dynamic_hugetlb", dynamic_hugetlb_setup);
