@@ -1010,7 +1010,11 @@ struct perf_sample_data {
 	struct perf_raw_record		*raw;
 	struct perf_branch_stack	*br_stack;
 	u64				period;
+#ifndef __GENKSYMS__
 	union perf_sample_weight	weight;
+#else
+	u64				weight;
+#endif
 	u64				txn;
 	union  perf_mem_data_src	data_src;
 
@@ -1040,8 +1044,10 @@ struct perf_sample_data {
 
 	u64				phys_addr;
 	u64				cgroup;
+#ifndef __GENKSYMS__
 	u64				data_page_size;
 	u64				code_page_size;
+#endif
 } ____cacheline_aligned;
 
 /* default value for data source */
