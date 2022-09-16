@@ -247,6 +247,13 @@ int fpu__copy(struct task_struct *dst, struct task_struct *src)
 
 	set_tsk_thread_flag(dst, TIF_NEED_FPU_LOAD);
 
+	/*
+	 * Children never inherit PASID state.
+	 * Force it to have its init value:
+	 */
+	if (use_xsave())
+		dst_fpu->fpstate->regs.xsave.header.xfeatures &= ~XFEATURE_MASK_PASID;
+
 	trace_x86_fpu_copy_src(src_fpu);
 	trace_x86_fpu_copy_dst(dst_fpu);
 
