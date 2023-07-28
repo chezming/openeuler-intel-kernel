@@ -110,6 +110,7 @@ resource_size_t pci_iov_resource_size(struct pci_dev *dev, int resno)
 
 	return dev->sriov->barsz[resno - PCI_IOV_RESOURCES];
 }
+EXPORT_SYMBOL(pci_iov_resource_size);
 
 static void pci_read_vf_config_common(struct pci_dev *virtfn)
 {
