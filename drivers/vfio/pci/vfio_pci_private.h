@@ -272,6 +272,8 @@ extern int vfio_pci_mmap_region(struct vfio_pci_device *vdev, unsigned int index
 #ifdef CONFIG_VFIO_PCI_IOV
 extern void vfio_pci_probe_vf_bar_mmaps(struct vfio_pci_device *vdev);
 extern int vfio_pci_sriov_region_init(struct vfio_pci_device *vdev);
+extern int __init init_pci_ext_cap_sriov_perm(struct perm_bits *perm);
+extern void vfio_pci_uninit_sriov_perm(struct perm_bits *perms);
 #else
 static inline void vfio_pci_probe_vf_bar_mmaps(struct vfio_pci_device *vdev)
 {
@@ -280,6 +282,15 @@ static inline void vfio_pci_probe_vf_bar_mmaps(struct vfio_pci_device *vdev)
 static inline int vfio_pci_sriov_region_init(struct vfio_pci_device *vdev)
 {
 	return -ENODEV;
+}
+
+static inline int init_pci_ext_cap_sriov_perm(struct perm_bits *perm)
+{
+	return 0;
+}
+
+static inline void vfio_pci_uninit_sriov_perm(struct perm_bits *perms)
+{
 }
 #endif
 

@@ -1000,6 +1000,8 @@ void vfio_pci_uninit_perm_bits(void)
 
 	free_perm_bits(&ecap_perms[PCI_EXT_CAP_ID_ERR]);
 	free_perm_bits(&ecap_perms[PCI_EXT_CAP_ID_PWR]);
+
+	vfio_pci_uninit_sriov_perm(&ecap_perms[PCI_EXT_CAP_ID_SRIOV]);
 }
 
 int __init vfio_pci_init_perm_bits(void)
@@ -1021,6 +1023,9 @@ int __init vfio_pci_init_perm_bits(void)
 	ret |= init_pci_ext_cap_err_perm(&ecap_perms[PCI_EXT_CAP_ID_ERR]);
 	ret |= init_pci_ext_cap_pwr_perm(&ecap_perms[PCI_EXT_CAP_ID_PWR]);
 	ecap_perms[PCI_EXT_CAP_ID_VNDR].writefn = vfio_raw_config_write;
+
+	/* SR-IOV Extended capabilities */
+	ret |= init_pci_ext_cap_sriov_perm(&ecap_perms[PCI_EXT_CAP_ID_SRIOV]);
 
 	if (ret)
 		vfio_pci_uninit_perm_bits();
