@@ -191,6 +191,9 @@ extern void vfio_pci_uninit_perm_bits(void);
 extern int vfio_config_init(struct vfio_pci_device *vdev);
 extern void vfio_config_free(struct vfio_pci_device *vdev);
 
+extern void vfio_pci_release_region(struct vfio_pci_device *vdev,
+				    unsigned int index);
+
 extern int vfio_pci_register_dev_region(struct vfio_pci_device *vdev,
 					unsigned int type, unsigned int subtype,
 					const struct vfio_pci_regops *ops,

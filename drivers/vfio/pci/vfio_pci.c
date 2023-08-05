@@ -471,12 +471,23 @@ disable_exit:
 	return ret;
 }
 
+void vfio_pci_release_region(struct vfio_pci_device *vdev, unsigned int index)
+{
+	struct pci_dev *pdev = vdev->pdev;
+
+	if (!vdev->barmap[index])
+		return;
+	pci_iounmap(pdev, vdev->barmap[index]);
+	pci_release_selected_regions(pdev, 1 << index);
+	vdev->barmap[index] = NULL;
+}
+
 static void vfio_pci_disable(struct vfio_pci_device *vdev)
 {
 	struct pci_dev *pdev = vdev->pdev;
 	struct vfio_pci_dummy_resource *dummy_res, *tmp;
 	struct vfio_pci_ioeventfd *ioeventfd, *ioeventfd_tmp;
-	int i, bar;
+	int i;
 
 	/* Stop the device from further DMA */
 	pci_clear_master(pdev);
@@ -505,14 +516,8 @@ static void vfio_pci_disable(struct vfio_pci_device *vdev)
 
 	vfio_config_free(vdev);
 
-	for (i = 0; i < PCI_STD_NUM_BARS; i++) {
-		bar = i + PCI_STD_RESOURCES;
-		if (!vdev->barmap[bar])
-			continue;
-		pci_iounmap(pdev, vdev->barmap[bar]);
-		pci_release_selected_regions(pdev, 1 << bar);
-		vdev->barmap[bar] = NULL;
-	}
+	for (i = 0; i < PCI_STD_NUM_BARS; i++)
+		vfio_pci_release_region(vdev, i);
 
 	list_for_each_entry_safe(dummy_res, tmp,
 				 &vdev->dummy_resources_list, res_next) {
