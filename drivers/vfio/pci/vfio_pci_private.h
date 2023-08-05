@@ -209,6 +209,8 @@ extern u16 vfio_pci_memory_lock_and_enable(struct vfio_pci_device *vdev);
 extern void vfio_pci_memory_unlock_and_restore(struct vfio_pci_device *vdev,
 					       u16 cmd);
 
+extern void vfio_pci_probe_one_mmap(struct vfio_pci_device *vdev, int bar);
+
 #ifdef CONFIG_VFIO_PCI_IGD
 extern int vfio_pci_igd_init(struct vfio_pci_device *vdev);
 #else
