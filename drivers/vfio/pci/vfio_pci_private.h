@@ -210,6 +210,8 @@ extern void vfio_pci_memory_unlock_and_restore(struct vfio_pci_device *vdev,
 					       u16 cmd);
 
 extern void vfio_pci_probe_one_mmap(struct vfio_pci_device *vdev, int bar);
+extern int vfio_pci_mmap_region(struct vfio_pci_device *vdev, unsigned int index,
+				struct vm_area_struct *vma);
 
 #ifdef CONFIG_VFIO_PCI_IOV
 extern void vfio_pci_probe_vf_bar_mmaps(struct vfio_pci_device *vdev);

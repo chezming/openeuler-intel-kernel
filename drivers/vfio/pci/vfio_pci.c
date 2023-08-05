@@ -1733,33 +1733,13 @@ static const struct vm_operations_struct vfio_pci_mmap_ops = {
 	.fault = vfio_pci_mmap_fault,
 };
 
-int vfio_pci_mmap(void *device_data, struct vm_area_struct *vma)
+int vfio_pci_mmap_region(struct vfio_pci_device *vdev, unsigned int index,
+			 struct vm_area_struct *vma)
 {
-	struct vfio_pci_device *vdev = device_data;
 	struct pci_dev *pdev = vdev->pdev;
-	unsigned int index;
 	u64 phys_len, req_len, pgoff, req_start;
 	int ret;
 
-	index = vma->vm_pgoff >> (VFIO_PCI_OFFSET_SHIFT - PAGE_SHIFT);
-
-	if (index >= VFIO_PCI_NUM_REGIONS + vdev->num_regions)
-		return -EINVAL;
-	if (vma->vm_end < vma->vm_start)
-		return -EINVAL;
-	if ((vma->vm_flags & VM_SHARED) == 0)
-		return -EINVAL;
-	if (index >= VFIO_PCI_NUM_REGIONS) {
-		int regnum = index - VFIO_PCI_NUM_REGIONS;
-		struct vfio_pci_region *region = vdev->region + regnum;
-
-		if (region->ops && region->ops->mmap &&
-		    (region->flags & VFIO_REGION_INFO_FLAG_MMAP))
-			return region->ops->mmap(vdev, region, vma);
-		return -EINVAL;
-	}
-	if (index >= VFIO_PCI_ROM_REGION_INDEX)
-		return -EINVAL;
 	if (!vdev->bar_mmap_supported[index])
 		return -EINVAL;
 
@@ -1801,6 +1781,34 @@ int vfio_pci_mmap(void *device_data, struct vm_area_struct *vma)
 	vma->vm_ops = &vfio_pci_mmap_ops;
 
 	return 0;
+}
+
+int vfio_pci_mmap(void *device_data, struct vm_area_struct *vma)
+{
+	struct vfio_pci_device *vdev = device_data;
+	unsigned int index;
+
+	index = vma->vm_pgoff >> (VFIO_PCI_OFFSET_SHIFT - PAGE_SHIFT);
+
+	if (index >= VFIO_PCI_NUM_REGIONS + vdev->num_regions)
+		return -EINVAL;
+	if (vma->vm_end < vma->vm_start)
+		return -EINVAL;
+	if ((vma->vm_flags & VM_SHARED) == 0)
+		return -EINVAL;
+	if (index >= VFIO_PCI_NUM_REGIONS) {
+		int regnum = index - VFIO_PCI_NUM_REGIONS;
+		struct vfio_pci_region *region = vdev->region + regnum;
+
+		if (region->ops && region->ops->mmap &&
+		    (region->flags & VFIO_REGION_INFO_FLAG_MMAP))
+			return region->ops->mmap(vdev, region, vma);
+		return -EINVAL;
+	}
+	if (index >= VFIO_PCI_ROM_REGION_INDEX)
+		return -EINVAL;
+
+	return vfio_pci_mmap_region(vdev, index, vma);
 }
 EXPORT_SYMBOL_GPL(vfio_pci_mmap);
 
