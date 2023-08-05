@@ -215,9 +215,15 @@ extern int vfio_pci_mmap_region(struct vfio_pci_device *vdev, unsigned int index
 
 #ifdef CONFIG_VFIO_PCI_IOV
 extern void vfio_pci_probe_vf_bar_mmaps(struct vfio_pci_device *vdev);
+extern int vfio_pci_sriov_region_init(struct vfio_pci_device *vdev);
 #else
 static inline void vfio_pci_probe_vf_bar_mmaps(struct vfio_pci_device *vdev)
 {
+}
+
+static inline int vfio_pci_sriov_region_init(struct vfio_pci_device *vdev)
+{
+	return -ENODEV;
 }
 #endif
 

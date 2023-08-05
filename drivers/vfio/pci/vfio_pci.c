@@ -436,9 +436,14 @@ static int vfio_pci_enable(struct vfio_pci_device *vdev)
 	} else
 		vdev->msix_bar = 0xFF;
 
+	ret = vfio_pci_sriov_region_init(vdev);
+	if (ret && ret != -ENODEV) {
+		pci_warn(pdev, "Failed to setup SR-IOV VF BAR regions\n");
+		goto disable_exit;
+	}
+
 	if (!vfio_vga_disabled() && vfio_pci_is_vga(pdev))
 		vdev->has_vga = true;
-
 
 	if (vfio_pci_is_vga(pdev) &&
 	    pdev->vendor == PCI_VENDOR_ID_INTEL &&
