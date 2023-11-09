@@ -98,27 +98,6 @@ static const u16 pci_ext_cap_length[PCI_EXT_CAP_ID_MAX + 1] = {
 	[PCI_EXT_CAP_ID_PASID]	=	0,	/* not yet */
 };
 
-/*
- * Read/Write Permission Bits - one bit for each bit in capability
- * Any field can be read if it exists, but what is read depends on
- * whether the field is 'virtualized', or just pass thru to the
- * hardware.  Any virtualized field is also virtualized for writes.
- * Writes are only permitted if they have a 1 bit here.
- */
-struct perm_bits {
-	u8	*virt;		/* read/write virtual data, not hw */
-	u8	*write;		/* writeable bits */
-	int	(*readfn)(struct vfio_pci_device *vdev, int pos, int count,
-			  struct perm_bits *perm, int offset, __le32 *val);
-	int	(*writefn)(struct vfio_pci_device *vdev, int pos, int count,
-			   struct perm_bits *perm, int offset, __le32 val);
-};
-
-#define	NO_VIRT		0
-#define	ALL_VIRT	0xFFFFFFFFU
-#define	NO_WRITE	0
-#define	ALL_WRITE	0xFFFFFFFFU
-
 static int vfio_user_config_read(struct pci_dev *pdev, int offset,
 				 __le32 *val, int count)
 {
@@ -171,9 +150,9 @@ static int vfio_user_config_write(struct pci_dev *pdev, int offset,
 	return ret;
 }
 
-static int vfio_default_config_read(struct vfio_pci_device *vdev, int pos,
-				    int count, struct perm_bits *perm,
-				    int offset, __le32 *val)
+int vfio_default_config_read(struct vfio_pci_device *vdev, int pos,
+			     int count, struct perm_bits *perm,
+			     int offset, __le32 *val)
 {
 	__le32 virt = 0;
 
@@ -197,9 +176,9 @@ static int vfio_default_config_read(struct vfio_pci_device *vdev, int pos,
 	return count;
 }
 
-static int vfio_default_config_write(struct vfio_pci_device *vdev, int pos,
-				     int count, struct perm_bits *perm,
-				     int offset, __le32 val)
+int vfio_default_config_write(struct vfio_pci_device *vdev, int pos,
+			      int count, struct perm_bits *perm,
+			      int offset, __le32 val)
 {
 	__le32 virt = 0, write = 0;
 
@@ -335,7 +314,7 @@ static struct perm_bits virt_perms = {
 	.writefn = vfio_virt_config_write
 };
 
-static void free_perm_bits(struct perm_bits *perm)
+void free_perm_bits(struct perm_bits *perm)
 {
 	kfree(perm->virt);
 	kfree(perm->write);
@@ -343,7 +322,7 @@ static void free_perm_bits(struct perm_bits *perm)
 	perm->write = NULL;
 }
 
-static int alloc_perm_bits(struct perm_bits *perm, int size)
+int alloc_perm_bits(struct perm_bits *perm, int size)
 {
 	/*
 	 * Round up all permission bits to the next dword, this lets us
@@ -370,29 +349,6 @@ static int alloc_perm_bits(struct perm_bits *perm, int size)
 	perm->writefn = vfio_default_config_write;
 
 	return 0;
-}
-
-/*
- * Helper functions for filling in permission tables
- */
-static inline void p_setb(struct perm_bits *p, int off, u8 virt, u8 write)
-{
-	p->virt[off] = virt;
-	p->write[off] = write;
-}
-
-/* Handle endian-ness - pci and tables are little-endian */
-static inline void p_setw(struct perm_bits *p, int off, u16 virt, u16 write)
-{
-	*(__le16 *)(&p->virt[off]) = cpu_to_le16(virt);
-	*(__le16 *)(&p->write[off]) = cpu_to_le16(write);
-}
-
-/* Handle endian-ness - pci and tables are little-endian */
-static inline void p_setd(struct perm_bits *p, int off, u32 virt, u32 write)
-{
-	*(__le32 *)(&p->virt[off]) = cpu_to_le32(virt);
-	*(__le32 *)(&p->write[off]) = cpu_to_le32(write);
 }
 
 /* Caller should hold memory_lock semaphore */
@@ -437,7 +393,7 @@ static void vfio_bar_restore(struct vfio_pci_device *vdev)
 	}
 }
 
-static __le32 vfio_generate_bar_flags(struct pci_dev *pdev, int bar)
+__le32 vfio_generate_bar_flags(struct pci_dev *pdev, int bar)
 {
 	unsigned long flags = pci_resource_flags(pdev, bar);
 	u32 val;
@@ -1072,7 +1028,7 @@ int __init vfio_pci_init_perm_bits(void)
 	return ret;
 }
 
-static int vfio_find_cap_start(struct vfio_pci_device *vdev, int pos)
+int vfio_find_cap_start(struct vfio_pci_device *vdev, int pos)
 {
 	u8 cap;
 	int base = (pos >= PCI_CFG_SPACE_SIZE) ? PCI_CFG_SPACE_SIZE :
