@@ -280,6 +280,8 @@ static void vfio_pci_probe_mmaps(struct vfio_pci_device *vdev)
 
 		vfio_pci_probe_one_mmap(vdev, bar);
 	}
+
+	vfio_pci_probe_vf_bar_mmaps(vdev);
 }
 
 static void vfio_pci_try_bus_reset(struct vfio_pci_device *vdev);
