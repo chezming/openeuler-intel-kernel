@@ -104,10 +104,16 @@ struct vfio_pci_vendor_driver {
 	struct list_head                        next;
 };
 
+#ifdef CONFIG_VFIO_PCI_IOV
+#define VFIO_PCI_NUM_BARS	(PCI_STD_NUM_BARS + 1 + PCI_SRIOV_NUM_BARS)
+#else
+#define VFIO_PCI_NUM_BARS	PCI_STD_NUM_BARS
+#endif
+
 struct vfio_pci_device {
 	struct pci_dev		*pdev;
-	void __iomem		*barmap[PCI_STD_NUM_BARS];
-	bool			bar_mmap_supported[PCI_STD_NUM_BARS];
+	void __iomem		*barmap[VFIO_PCI_NUM_BARS];
+	bool			bar_mmap_supported[VFIO_PCI_NUM_BARS];
 	u8			*pci_config_map;
 	u8			*vconfig;
 	struct perm_bits	*msi_perm;
